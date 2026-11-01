@@ -73,7 +73,7 @@ test('a skill directory removed at runtime disappears', async () => {
   }
 })
 
-test('a directory change calls control.invalidate()', async () => {
+test('five rapid changes are coalesced into one invalidate()', async () => {
   const skillsDir = makeDir()
   const controller = new AbortController()
   let invalidations = 0
@@ -83,13 +83,17 @@ test('a directory change calls control.invalidate()', async () => {
       skillsDir,
       logger: quiet,
       control: { signal: controller.signal, invalidate: () => { invalidations += 1 } },
-      watchDebounceMs: 25,
+      watchDebounceMs: 50,
     })
     assert.equal((await provider.list({})).length, 1)
 
-    writeSkill(skillsDir, 'beta')
+    for (const name of ['beta', 'gamma', 'delta', 'epsilon', 'zeta']) writeSkill(skillsDir, name)
+
     const called = await waitFor(() => invalidations > 0)
     assert.equal(called, true, `invalidate() was not called (count=${invalidations})`)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    assert.equal(invalidations, 1, `expected one coalesced invalidate, got ${invalidations}`)
+    assert.equal((await provider.list({})).length, 6)
   } finally {
     controller.abort()
     rmSync(skillsDir, { recursive: true, force: true })

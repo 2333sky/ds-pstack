@@ -32,7 +32,7 @@ pstack 的 skill 正文沿用 Cursor 的工具名与子代理字段。在 DSH �
 | `poteto-agent`、`comment-sicko`（Cursor 子代理 manifest） | 无独立 agent manifest。把该角色的提示词正文贴进 `prompt`。 |
 | `readonly: true` | 无 schema 字段。在 `prompt` 里写明"只读，不要改文件"，事后用 `git status --porcelain` 核对。 |
 | `readonly: false` | 省略。 |
-| `model: <slug>`、reasoning effort | 无对应字段。`subagent` 不接受 `model`/`effort`，子代理跟随会话模型；只有 `workflow` 脚本里的 `agent()` 接受 `provider`/`model` 字符串（`effort` 在本版被明确拒绝）。 |
+| `model: <slug>`、reasoning effort | 默认无对应字段，子代理跟随会话模型。宿主启用 subagent 模型选择（`modelSelectionSettings` + `modelSelectionPolicy`，Plugins 页 `model-selection-settings`）后，schema 才展开 `provider`/`model`/`reasoning_effort`，且要先用 `list_subagent_models` 证明该组合可用；`subagent_fork` 无此配置。`workflow` 脚本里的 `agent()` 接受 `provider`/`model`，`effort` 在本版被明确拒绝。 |
 | `environment: "cloud"` | 无云代理。需要隔离就在本地 `git worktree`，并在 brief 里写明分支与目录。 |
 | `environment: "local"` | 省略。 |
 | `cloud_base_branch: <b>` | 无对应字段；在 brief 里要求 worker 先 checkout `<b>`。 |
@@ -54,7 +54,7 @@ pstack 的 skill 正文沿用 Cursor 的工具名与子代理字段。在 DSH �
 
 ## 3. Models
 
-Cursor 的模型 slug 在 DSH 里**没有一一映射**：DSH 的模型由宿主配置（Provider/模型 id），`subagent` 工具不接受模型参数。除非宿主恰好提供同名字符串，否则一律按下表处理并在回复里说明。
+Cursor 的模型 slug 在 DSH 里**没有一一映射**：DSH 的模型由宿主配置（Provider/模型 id）。`subagent` **默认**不接受模型参数；宿主启用 subagent 模型选择后才有 `provider`/`model`/`reasoning_effort`，用法见 §3.1。除非宿主恰好提供同名字符串，否则一律按下表处理并在回复里说明。
 
 | Cursor | DSH |
 | --- | --- |
@@ -71,7 +71,7 @@ Cursor 的模型 slug 在 DSH 里**没有一一映射**：DSH 的模型由宿主
 上游 playbook 里的 `Task 工具 + 模型选择`、`poteto-agent` 这类 subagent 类型在 DSH 没有对应 schema。做法照 `pstack-for-codex` 的纪律：
 
 - **显式 `model` + `effort` 只有在 DSH 的模型列表能证明这个组合时才传**；证明不了就省略，继承会话模型。
-- `subagent` / `subagent_fork` 不接受模型参数 → 一律省略。要分模型跑扇出用 `workflow` 的 `agent({ provider, model })`（它不接受 `effort`）。
+- `subagent` **默认**不接受模型参数。宿主把 `modelSelectionSettings` 设为 true 并配置 `modelSelectionPolicy` 后，schema 才展开 `provider`/`model`/`reasoning_effort`，并且要先用 `list_subagent_models` 证明 route 与 effort 可用再传。`subagent_fork` 没有这个配置项 → 一律省略。要分模型跑扇出也可以用 `workflow` 的 `agent({ provider, model })`（它不接受 `effort`）。
 - 证明不了时在回复或回执里写 `unverified: <requested model/effort>`，不要静默当成已生效。
 - `poteto-agent` / `comment-sicko` 没有独立 manifest → 把角色提示词正文贴进 `prompt`（见第 2 张表）。
 

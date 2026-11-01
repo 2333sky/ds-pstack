@@ -13,6 +13,7 @@
  *   node scripts/check-vendor.mjs --source <dir>        # also diff the tree against a live checkout
  */
 
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
@@ -23,6 +24,18 @@ const MANIFEST_PATH = join(ROOT, 'skills.manifest.json')
 
 function sha256(file) {
   return createHash('sha256').update(readFileSync(file)).digest('hex')
+}
+
+/** HEAD of the checkout containing `dir`, or undefined when it is not a git work tree. */
+function gitHead(dir) {
+  try {
+    return execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    return undefined
+  }
 }
 
 function walk(dir) {
@@ -109,15 +122,25 @@ function main() {
       const upstream = readFileSync(sourceKeys.get(key))
       if (!vendored.equals(upstream)) byteDiffs.push(key)
     }
+    const head = gitHead(source)
+    const expectedCommit = manifest.source?.commit
+    const headMatches = head !== undefined && expectedCommit !== undefined && head === expectedCommit
+    if (head === undefined) {
+      console.warn(`warning: cannot read git HEAD of ${source}; skipping commit check`)
+    } else if (!headMatches) {
+      console.error(`source HEAD ${head} does not match manifest.source.commit ${expectedCommit}`)
+    }
     sourceResult =
       ` source_checked=${sourceKeys.size}` +
       ` source_only=${onlyInSource.length}` +
       ` vendor_only=${onlyInVendor.length}` +
-      ` byte_diff=${byteDiffs.length}`
+      ` byte_diff=${byteDiffs.length}` +
+      ` source_head=${head ?? 'unavailable'}` +
+      ` head_match=${head === undefined ? 'unavailable' : headMatches}`
     if (onlyInSource.length > 0) console.error(`only in source: ${onlyInSource.join(', ')}`)
     if (onlyInVendor.length > 0) console.error(`only in vendor: ${onlyInVendor.join(', ')}`)
     if (byteDiffs.length > 0) console.error(`byte differences: ${byteDiffs.join(', ')}`)
-    if (onlyInSource.length + onlyInVendor.length + byteDiffs.length > 0) {
+    if (onlyInSource.length + onlyInVendor.length + byteDiffs.length > 0 || (head !== undefined && !headMatches)) {
       console.log(`FILES=${actual.size} manifest_ok=${manifestOk(missing, extra, mismatched, sizeMismatched, inventoryErrors)}${sourceResult}`)
       process.exitCode = 1
       return

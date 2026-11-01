@@ -8,7 +8,8 @@
  * resource base so playbooks/references stay readable.
  */
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { extractWhenToUse, parseSkillMarkdown } from '../lib/frontmatter.js'
@@ -115,6 +116,44 @@ async function main() {
 
   const unknown = await provider.get({ locator: { dir: join(SKILLS_DIR, 'does-not-exist') } }, {})
   check('get() returns undefined for an unknown locator', unknown === undefined)
+
+  // CRLF: a Windows checkout must parse, not silently drop the skill.
+  const scratch = mkdtempSync(join(tmpdir(), 'ds-pstack-smoke-'))
+  try {
+    const crlfDir = join(scratch, 'skills-crlf')
+    mkdirSync(join(crlfDir, 'crlf-skill'), { recursive: true })
+    const crlfSource = [
+      '---',
+      'name: crlf-skill',
+      'description: Verifies CRLF frontmatter. Use for windows checkouts.',
+      'disable-model-invocation: true',
+      '---',
+      '',
+      '# CRLF skill',
+      '',
+      'CRLF body.',
+      '',
+    ].join('\r\n')
+    writeFileSync(join(crlfDir, 'crlf-skill', 'SKILL.md'), crlfSource)
+    const crlfProvider = createSkillProvider({ skillsDir: crlfDir, logger: { warn() {} } })
+    const crlfCandidates = await crlfProvider.list({})
+    check('CRLF frontmatter parses into a candidate', Array.isArray(crlfCandidates) && crlfCandidates.length === 1, JSON.stringify(crlfCandidates))
+    const crlfBody = await crlfProvider.get(crlfCandidates[0], {})
+    check(
+      'CRLF skill keeps a non-empty body without carriage returns',
+      typeof crlfBody?.content === 'string' && crlfBody.content.includes('# CRLF skill') && !crlfBody.content.includes('\r'),
+    )
+
+    const missing = createSkillProvider({ skillsDir: join(scratch, 'nope'), logger: { warn() {} } })
+    const observation = await missing.list({})
+    check(
+      'missing skills dir reports an incomplete catalog',
+      observation?.complete === false && Array.isArray(observation.candidates) && observation.candidates.length === 0,
+      JSON.stringify(observation),
+    )
+  } finally {
+    rmSync(scratch, { recursive: true, force: true })
+  }
 
   let parsed = 0
   const parseFailures = []

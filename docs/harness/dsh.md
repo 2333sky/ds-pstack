@@ -53,7 +53,7 @@ Cursor 的模型 slug 在 DSH 里**没有一一映射**：DSH 的模型由宿主
 | `gpt-4o` / `gpt-4`（仅出现在示例文本里） | **无映射**。 |
 | `auto` / `inherit-parent` | 省略 `model`（DSH 默认即继承会话模型）。 |
 | 角色值 `<model> <effort>`（如 `opus high`） | **无映射**。`workflow` 的 `agent()` 只接受 `provider` + `model`，`effort` 会被拒绝。 |
-| `~/.cursor/rules/pstack-models.mdc` 里的角色行 | 无对应规则文件。DSH 没有用户级 always-apply rules 目录，角色行不可读取；视为缺失，用 skill 里的默认值并在回复里说明。 |
+| `~/.cursor/rules/pstack-models.mdc` 里的角色行 | **文件格式无对应**：DSH 不读 `.mdc`，但会读用户级 `~/.dsh/AGENTS.md` 与 `~/.agents/AGENTS.md`（`dsh-agent-instructions` 的 `USER_GLOBAL_FILE = "AGENTS.md"`，由 `@deepseek-ai/dsh-base` 加载）。把角色行搬进其中一个文件即可读取；没有搬时视为缺失，用 skill 默认值并在回复里说明。 |
 
 ## 4. Paths
 
@@ -61,20 +61,20 @@ Cursor 的模型 slug 在 DSH 里**没有一一映射**：DSH 的模型由宿主
 | --- | --- |
 | `.cursor/skills/`、`~/.cursor/skills/` | 无项目级 `.cursor` 目录。skill 由插件提供：`<pstack>/skills/<name>/SKILL.md`（本插件为 `skills/`）。项目自带 skill 由 DSH 的 project skill 目录提供。 |
 | `~/.cursor/plugins/`、`.cursor-plugin/plugin.json` | DSH 插件是 npm 包 + `cordis.patch.yml`，没有 `plugin.json`。 |
-| `.cursor/rules/*.mdc`（always-applied rules） | 项目根的 `AGENTS.md` 会被 DSH 读取；`.mdc` 不会被读取。用户级 always-apply 规则**无对应**。 |
+| `.cursor/rules/*.mdc`（always-applied rules） | 项目根的 `AGENTS.md` 会被 DSH 读取；`.mdc` 不会被读取。用户级 always-apply 规则对应 `~/.dsh/AGENTS.md` 与 `~/.agents/AGENTS.md`，同样会被加载。 |
 | `https://github.com/cursor/plugins/blob/main/pstack/<path>` | 本地 `<pstack>/<path>`（插件已 vendor `skills/`）。读本地副本，不要联网抓取；需要链接时把 URL 给用户。 |
 | `~/.cursor/projects/<slug>/agent-transcripts/` 会话记录 | 无等价路径。会话历史由 DSH 宿主管理；Bot 会话内可用 `read_own_chat`，普通代码代理没有该工具，删掉依赖 transcript 的步骤。 |
 | `.cursor/mcp.json`、`~/.cursor/mcp.json` | 无等价文件。MCP 服务由宿主/Connectors 配置，不在仓库里。 |
 
 ## 5. setup-pstack
 
-`setup-pstack` 在 Cursor 里做三件事：探测可用模型、选角色模型、写 `~/.cursor/rules/pstack-models.mdc`。**在 DSH 整段不适用**：
+`setup-pstack` 在 Cursor 里做三件事：探测可用模型、选角色模型、写 `~/.cursor/rules/pstack-models.mdc`。**在 DSH 里只有最后一步的容器变了**：
 
-- DSH 没有用户级 always-apply 规则目录，写出的 `.mdc` 不会被任何会话读取。
-- DSH 的模型清单属于宿主配置，不由 skill 探测，也没有"把模型写进规则文件"的机制。
-- 角色行依赖的 `pstack-models.mdc` 因此恒为缺失。
+- DSH 不读 `.mdc`，也不存在 `~/.cursor/rules/` 这个目录；写出的规则文件不会被任何会话读取。
+- 但 DSH 会加载用户级 `AGENTS.md`：`~/.dsh/AGENTS.md` 与 `~/.agents/AGENTS.md`（`dsh-agent-instructions` 的 `USER_GLOBAL_FILE = "AGENTS.md"`，由 `@deepseek-ai/dsh-base` 挂载）；项目根的同名文件也会被读取。
+- DSH 的模型清单属于宿主配置，不由 skill 探测，也没有"把模型写进规则文件"的机制；所以"探测模型"这一步仍不适用。
 
-做法：跳过 setup-pstack，改用会话/宿主已配置的模型；skill 里"按 role 行取模型"的分支按"规则缺失"处理（用 skill 内默认值或直接省略 `model`），并在回复里说明一次。模型/思考等级需要变更时，交给用户在宿主里设置，skill 不代写。
+做法：跳过 `setup-pstack` 的模型探测与 `.mdc` 写入；如果用户要固定角色模型，把角色行手工搬进 `~/.dsh/AGENTS.md`（用户级，对所有项目生效）或项目根 `AGENTS.md`（只对该项目生效），DSH 会照常加载。skill 里"按 role 行取模型"的分支在没有角色行时用 skill 内默认值或省略 `model`，并在回复里说明一次。模型/思考等级本身仍需用户在宿主里设置，skill 不代写。
 
 ## 6. 宿主独有功能
 
@@ -92,9 +92,11 @@ Cursor 的模型 slug 在 DSH 里**没有一一映射**：DSH 的模型由宿主
 
 ## 语义映射说明（本插件有意为之的偏离）
 
-上游 58 个 skill 里有 57 个带 `disable-model-invocation: true`，只有 `poteto-mode` 没有。这个字段在 Cursor 里的含义是"不要由模型自动触发，只在用户显式调用时加载"。
+上游 58 个 skill 里有 57 个带 `disable-model-invocation: true`，唯一没有这个字段的是 `setup-pstack`（§5 已建议跳过它）。`poteto-mode` 本身也带这个字段。
 
-在 DSH 里**不能照搬这个语义**：`skill` 工具是模型加载 skill 的唯一通道，`poteto-mode` 的路由表又通过"读另一个 skill"来工作。一旦把 `modelInvocable` 置为 false，这些 skill 就不会出现在模型可见的 catalog 里，`poteto-mode` 的引用链直接断掉，58 个 skill 等于全部不可用。
+这个字段在 Cursor 里的含义是"不要由模型自动触发，只在用户显式调用时加载"。关键点是它并非只保护外围 skill——路由器 `poteto-mode` 也在被隐藏之列。
+
+在 DSH 里**不能照搬这个语义**：`skill` 工具是模型加载 skill 的唯一通道，`poteto-mode` 的路由表又通过"读另一个 skill"来工作。一旦把 `modelInvocable` 置为 false，包括 `poteto-mode` 自身在内的 skill 都不会出现在模型可见的 catalog 里，引用链从根上断掉，58 个 skill 等于全部不可用。
 
 因此本插件的 provider 对**所有** skill 统一返回：
 
@@ -108,3 +110,12 @@ invocation: { modelInvocable: true, userInvocable: true }
 
 - `rank` 固定为 `900`，低于 DSH 注册表自带的保留层级，也不会遮蔽项目级 skill（项目级是 100/200）。
 - `whenToUse` 是从 description 的 `Use for ...` 句尾拆出来的；拆不出来就留空，不臆造。58 个里拆出 25 个，其余保持只有 description。
+
+## 校验脚本能证明什么
+
+`scripts/check-vendor.mjs` 有两种模式，可信度不同：
+
+- **不带 `--source`**：重算 `skills/` 的 sha256 并与 `skills.manifest.json` 比对。这是**内部一致性检查**，不是来源校验——同时改动某个 skill 文件和 manifest 里对应的 hash，脚本仍会输出 `VENDOR_OK`。
+- **带 `--source <上游 checkout>`**：与上游树逐字节比对（`source_only` / `vendor_only` / `byte_diff`），文件集合也一起核。这才是可信校验；checkout 必须固定在 `ae5650fe`。
+
+`skills.manifest.json` 的 `fileCount` 不参与校验，以 `files` 的实际条目为准；本仓库未配置 CI，每次发布前需手动跑一次 `--source` 模式。`scripts/smoke.mjs` 只验证 provider 契约与相对路径可达性，不校验来源。

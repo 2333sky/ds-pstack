@@ -13,6 +13,7 @@
     "lib",
     "skills",
     "docs",
+    "scripts",
     "cordis.patch.yml",
     "LICENSE",
     "NOTICE",
@@ -32,7 +33,7 @@
   },
   "dsh": {
     "engines": {
-      "dsh": "0.2.1-rc.2"
+      "dsh": "^0.2.1-rc.2"
     },
     "bundle": {
       "patch": "./cordis.patch.yml"

@@ -1,0 +1,7 @@
+# ds-pstack: register the vendored pstack skill provider.
+#
+# The row id and the loader specifier must both equal the package.json `name`
+# (`ds-pstack`) so the bundle is mounted as this package.
+- insert:
+    - id: ds-pstack
+      name: 'ds-pstack'

@@ -2,8 +2,11 @@
 /**
  * Verify that the vendored `skills/` tree still matches `skills.manifest.json`.
  *
- * The manifest records sha256 of every file as taken from
- * cursor/plugins@pstack@ae5650fe. Any edited, added, or missing file fails here.
+ * The manifest is a lock file: it records the upstream source (repository,
+ * subdirectory, commit, version, license, retrieval time), an inventory
+ * (file count, total bytes, hash algorithm) and per-file sha256 + byte size as
+ * taken from cursor/plugins@pstack@ae5650fe. Any edited, added, or missing
+ * file fails here, as does a size or inventory mismatch.
  *
  * Usage:
  *   node scripts/check-vendor.mjs                       # verify against the manifest
@@ -45,6 +48,12 @@ function parseArgs(argv) {
   return { source: resolve(source) }
 }
 
+function manifestOk(missing, extra, mismatched, sizeMismatched, inventoryErrors) {
+  return String(
+    missing.length + extra.length + mismatched.length + sizeMismatched.length + inventoryErrors.length === 0,
+  )
+}
+
 function main() {
   const { source } = parseArgs(process.argv.slice(2))
   if (!existsSync(MANIFEST_PATH)) throw new Error(`missing manifest: ${MANIFEST_PATH}`)
@@ -59,10 +68,31 @@ function main() {
   const missing = Object.keys(expected).filter((key) => !actual.has(key))
   const extra = [...actual.keys()].filter((key) => !(key in expected))
   const mismatched = []
+  const sizeMismatched = []
+  let actualTotalBytes = 0
   for (const [key, file] of actual) {
+    actualTotalBytes += statSync(file).size
     if (!(key in expected)) continue
+    const expectedFile = expected[key]
     const digest = sha256(file)
-    if (digest !== expected[key]) mismatched.push({ key, expected: expected[key], actual: digest })
+    if (digest !== expectedFile.sha256) {
+      mismatched.push({ key, expected: expectedFile.sha256, actual: digest })
+    }
+    const size = statSync(file).size
+    if (size !== expectedFile.bytes) {
+      sizeMismatched.push({ key, expected: expectedFile.bytes, actual: size })
+    }
+  }
+
+  const inventoryErrors = []
+  if (manifest.inventory?.fileCount !== actual.size) {
+    inventoryErrors.push(`fileCount expected=${manifest.inventory?.fileCount} actual=${actual.size}`)
+  }
+  if (manifest.inventory?.totalBytes !== actualTotalBytes) {
+    inventoryErrors.push(`totalBytes expected=${manifest.inventory?.totalBytes} actual=${actualTotalBytes}`)
+  }
+  if (manifest.inventory?.hashAlgorithm !== 'sha256') {
+    inventoryErrors.push(`hashAlgorithm expected=sha256 actual=${manifest.inventory?.hashAlgorithm}`)
   }
 
   let sourceResult = ''
@@ -88,7 +118,7 @@ function main() {
     if (onlyInVendor.length > 0) console.error(`only in vendor: ${onlyInVendor.join(', ')}`)
     if (byteDiffs.length > 0) console.error(`byte differences: ${byteDiffs.join(', ')}`)
     if (onlyInSource.length + onlyInVendor.length + byteDiffs.length > 0) {
-      console.log(`FILES=${actual.size} manifest_ok=${missing.length + extra.length + mismatched.length === 0}${sourceResult}`)
+      console.log(`FILES=${actual.size} manifest_ok=${manifestOk(missing, extra, mismatched, sizeMismatched, inventoryErrors)}${sourceResult}`)
       process.exitCode = 1
       return
     }
@@ -97,12 +127,16 @@ function main() {
   for (const key of missing) console.error(`missing: ${key}`)
   for (const key of extra) console.error(`unexpected: ${key}`)
   for (const item of mismatched) console.error(`hash mismatch: ${item.key} expected=${item.expected} actual=${item.actual}`)
+  for (const item of sizeMismatched) console.error(`size mismatch: ${item.key} expected=${item.expected} actual=${item.actual}`)
+  for (const message of inventoryErrors) console.error(`inventory: ${message}`)
 
-  const ok = missing.length + extra.length + mismatched.length === 0
+  const ok = manifestOk(missing, extra, mismatched, sizeMismatched, inventoryErrors) === 'true'
   console.log(
-    `upstream=${manifest.upstream.repo}@${manifest.upstream.sha}` +
+    `source=${manifest.source.repository}@${manifest.source.commit} version=${manifest.source.version}` +
       ` files=${actual.size} manifest_files=${Object.keys(expected).length}` +
-      ` missing=${missing.length} extra=${extra.length} mismatched=${mismatched.length}${sourceResult}`,
+      ` total_bytes=${actualTotalBytes}` +
+      ` missing=${missing.length} extra=${extra.length} mismatched=${mismatched.length}` +
+      ` size_mismatched=${sizeMismatched.length} inventory_errors=${inventoryErrors.length}${sourceResult}`,
   )
   console.log(ok ? 'VENDOR_OK' : 'VENDOR_FAILED')
   if (!ok) process.exitCode = 1

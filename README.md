@@ -31,7 +31,7 @@ dsh --profile <profile> --dump-config | grep -A2 ds-pstack
 export const name = 'ds-pstack'
 export const inject = ['skills']
 export function apply(ctx) {
-  ctx.effect(() => ctx.skills.registerProvider(() => createSkillProvider()))
+  ctx.effect(() => ctx.skills.registerProvider((control) => createSkillProvider({ control })))
 }
 ```
 
@@ -50,6 +50,14 @@ provider 运行时扫描 `skills/*/SKILL.md`，每个 skill 返回：
 
 `resourceBase` 是 playbook 能被读到的关键：DSH 的 `skill` 工具没有子路径参数，模型拿到 base directory 后用 `read` 读 `skills/poteto-mode/playbooks/feature.md`。
 
+### 运行期变化
+
+DSH 的 skill 注册表缓存 catalog（名字 + 描述），不缓存正文：
+
+- **改已有 SKILL.md**：`get()` 每次都重新读盘，下次加载立即生效，不需要任何通知。
+- **新增 / 删除 skill 目录**：需要让注册表重算 catalog。provider 用 `fs.watch` 监听 `skills/` 和每个 skill 目录，debounce 200 ms 后调用注册时拿到的 `control.invalidate()`；注册被注销时 `control.signal` abort 会关闭全部 watcher。
+- 刻意**不用** `fs.watch(dir, { recursive: true })`：Linux 上递归 watcher 即使 `unref()` 也会把事件循环钉住，进程无法退出（Node 22 可复现）。改用「根目录 + 每 skill 目录各一个非递归 watcher」覆盖同样的变化。
+
 ### 有意的语义偏离
 
 上游 57 个 skill 带 `disable-model-invocation: true`。DSH 的 `skill` 工具是模型加载 skill 的唯一通道，照搬会把 `poteto-mode` 的路由链全部切断，因此 provider 统一返回 `modelInvocable: true`。上游原值保留在 `metadata.upstream.disableModelInvocation` 里，`skills/` 一个字节没改。详见 [`docs/harness/dsh.md`](docs/harness/dsh.md) 末尾「语义映射说明」。
@@ -64,9 +72,10 @@ lib/provider.js       # createSkillProvider()
 lib/frontmatter.js    # 最小 YAML frontmatter 解析
 skills/               # 上游 58 个 skill 目录，535 文件，逐字节 vendor
 docs/harness/dsh.md   # Cursor → DSH 适配指南（六张表 + 语义说明）
-skills.manifest.json  # 每个 vendor 文件的 sha256
+skills.manifest.json  # vendor lock：来源元数据 + 逐文件 sha256/bytes
 scripts/check-vendor.mjs  # 校验 vendor 未被改动
 scripts/smoke.mjs         # 不装 profile 的 provider 冒烟测试
+scripts/provider-refresh.test.mjs  # 目录增删 / invalidate / abort 契约
 LICENSE               # 上游 MIT 原文（Copyright (c) 2026 Lauren Tan）
 NOTICE                # 来源、pin SHA、vendor / 新增边界
 ```
@@ -74,11 +83,14 @@ NOTICE                # 来源、pin SHA、vendor / 新增边界
 ## 校验
 
 ```sh
-# vendor 完整性：535 个文件 hash + 与上游 checkout 逐字节比对
+# vendor 完整性：lock 里的逐文件 sha256/bytes、inventory 总数，再与上游 checkout 逐字节比对
 node scripts/check-vendor.mjs --source /path/to/cursor/plugins/pstack/skills
 
 # provider 冒烟：58 条候选、抽样正文、resourceBase、frontmatter 解析
 node scripts/smoke.mjs
+
+# 热更新契约：新增/删除目录可见、invalidate 被调用、abort 后停止
+node --test scripts/provider-refresh.test.mjs
 
 # 打包内容
 npm pack --dry-run

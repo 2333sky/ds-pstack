@@ -41,6 +41,17 @@ pstack 的 skill 正文沿用 Cursor 的工具名与子代理字段。在 DSH �
 | `file_attachments` | 无对应字段；把路径列进 `prompt`。 |
 | 多个并行子任务 | 一条 assistant 消息里同时发多个 `subagent` / `subagent_fork`，或写 `workflow` 脚本做批量扇出。 |
 
+## 2.1 委派纪律
+
+上游 playbook 假设子代理带超时、模型选择和类型 manifest，DSH 只有 `subagent` / `subagent_fork`（异步、没有超时参数）。纪律因此由发起方承担：
+
+- **派发前**：范围、验收标准、返回格式写进 `prompt`，并写明"卡住怎么办"。先读完契约、跑完基线再派，保证子代理卡住时你仍有可交付内容。
+- **必须设超时**：DSH 没有 timeout 参数，自己记时间。超过 brief 里写明的检查点（建议 5 分钟）仍无结果，就中断并接管剩余部分，在回复里写明接管原因和已经拿到的部分。不要无限等，也不要重复派同一个任务。
+- **不要轮询**：`subagent` 立即返回 id，结果异步回来；用 `send_message` 追问，不要用 sleep 或反复查询代替继续工作。
+- **一次只派一件**：要并行就在一条消息里同时发多个 `subagent`；有依赖的任务串行。
+
+实测依据：一次 30 分钟的运行里，派出去的子 agent 卡了 6 分钟无人处理，最后只能中断接管。上游 playbook 假设的"带模型选择的 Task 工具"在 DSH 并不存在，现场翻译这些字段本身就是额外开销。
+
 ## 3. Models
 
 Cursor 的模型 slug 在 DSH 里**没有一一映射**：DSH 的模型由宿主配置（Provider/模型 id），`subagent` 工具不接受模型参数。除非宿主恰好提供同名字符串，否则一律按下表处理并在回复里说明。
@@ -54,6 +65,15 @@ Cursor 的模型 slug 在 DSH 里**没有一一映射**：DSH 的模型由宿主
 | `auto` / `inherit-parent` | 省略 `model`（DSH 默认即继承会话模型）。 |
 | 角色值 `<model> <effort>`（如 `opus high`） | **无映射**。`workflow` 的 `agent()` 只接受 `provider` + `model`，`effort` 会被拒绝。 |
 | `~/.cursor/rules/pstack-models.mdc` 里的角色行 | **文件格式无对应**：DSH 不读 `.mdc`，但会读用户级 `~/.dsh/AGENTS.md` 与 `~/.agents/AGENTS.md`（`dsh-agent-instructions` 的 `USER_GLOBAL_FILE = "AGENTS.md"`，由 `@deepseek-ai/dsh-base` 加载）。把角色行搬进其中一个文件即可读取；没有搬时视为缺失，用 skill 默认值并在回复里说明。 |
+
+## 3.1 模型与思考等级必须被宿主证明
+
+上游 playbook 里的 `Task 工具 + 模型选择`、`poteto-agent` 这类 subagent 类型在 DSH 没有对应 schema。做法照 `pstack-for-codex` 的纪律：
+
+- **显式 `model` + `effort` 只有在 DSH 的模型列表能证明这个组合时才传**；证明不了就省略，继承会话模型。
+- `subagent` / `subagent_fork` 不接受模型参数 → 一律省略。要分模型跑扇出用 `workflow` 的 `agent({ provider, model })`（它不接受 `effort`）。
+- 证明不了时在回复或回执里写 `unverified: <requested model/effort>`，不要静默当成已生效。
+- `poteto-agent` / `comment-sicko` 没有独立 manifest → 把角色提示词正文贴进 `prompt`（见第 2 张表）。
 
 ## 4. Paths
 
@@ -118,4 +138,4 @@ invocation: { modelInvocable: true, userInvocable: true }
 - **不带 `--source`**：重算 `skills/` 的 sha256 并与 `skills.manifest.json` 比对。这是**内部一致性检查**，不是来源校验——同时改动某个 skill 文件和 manifest 里对应的 hash，脚本仍会输出 `VENDOR_OK`。
 - **带 `--source <上游 checkout>`**：与上游树逐字节比对（`source_only` / `vendor_only` / `byte_diff`），文件集合也一起核。这才是可信校验；checkout 必须固定在 `ae5650fe`。
 
-`skills.manifest.json` 的 `fileCount` 不参与校验，以 `files` 的实际条目为准；本仓库未配置 CI，每次发布前需手动跑一次 `--source` 模式。`scripts/smoke.mjs` 只验证 provider 契约与相对路径可达性，不校验来源。
+`skills.manifest.json` 是 lock 文件：`source` 记录上游仓库、子目录、commit、version、license 与取回时间，`inventory` 记录 `fileCount` / `totalBytes` / `hashAlgorithm`，`files` 逐文件记录 `sha256` 与 `bytes`。`check-vendor.mjs` 会同时校验哈希、字节数、总字节数、文件数与哈希算法，但**它仍不是来源校验**——与上游的逐字节比对只在 `--source` 模式下发生。本仓库未配置 CI，每次发布前需手动跑一次 `--source` 模式。`scripts/smoke.mjs` 只验证 provider 契约与相对路径可达性，不校验来源。
